@@ -1,8 +1,9 @@
 import pickle
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware # Import CORS middleware
 from pydantic import BaseModel
 import pandas as pd
-import uvicorn # Required for local testing, though Render uses the command directly
+import uvicorn 
 
 # --- Model Loading ---
 MODEL_PATH = 'aqi_prediction_pipeline.pkl'
@@ -11,7 +12,6 @@ try:
     with open(MODEL_PATH, 'rb') as file:
         model = pickle.load(file)
 except Exception as e:
-    # This will raise an error on startup if the model file is missing or corrupted
     print(f"ERROR: Could not load the model from {MODEL_PATH}. Exception: {e}")
     model = None
 
@@ -22,11 +22,26 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# --- CORS Configuration ---
+# 1. Define origins (domains) allowed to access the API. 
+# We use ["*"] to allow all origins, which is common for public APIs or testing.
+origins = [
+    "*", 
+    # If you later want to restrict access, replace "*" with the domain of your frontend:
+    # "https://yourfrontendapp.com" 
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,        # Allows the origins defined above
+    allow_credentials=True,       # Allows cookies/authorization headers
+    allow_methods=["*"],          # Allows all methods (GET, POST, etc.)
+    allow_headers=["*"],          # Allows all headers
+)
+# --------------------------
+
 # --- Input Data Model (Pydantic) ---
-# Defines the structure and data types for the API input
 class AQIInput(BaseModel):
-    # Note: Using PM2_5 as a valid Python variable name,
-    # it will be converted back to 'PM2.5' for the model
     PM2_5: float
     PM10: float
     SO2: float
@@ -34,7 +49,6 @@ class AQIInput(BaseModel):
     NO2: float
     CO: float
     
-    # Example values for FastAPI's auto-generated documentation
     model_config = {
         "json_schema_extra": {
             "examples": [
@@ -68,11 +82,9 @@ def predict_aqi(data: AQIInput):
         raise HTTPException(status_code=503, detail="Model is unavailable. Check server logs for load errors.")
 
     try:
-        # Convert Pydantic model to a dictionary
         input_dict = data.model_dump()
         
-        # Map the valid Python key (PM2_5) back to the expected feature name ('PM2.5')
-        # The other keys already match
+        # Map PM2_5 back to 'PM2.5' for the model
         input_data_for_model = {
             'PM2.5': input_dict.pop('PM2_5'),
             'PM10': input_dict['PM10'],
@@ -82,23 +94,17 @@ def predict_aqi(data: AQIInput):
             'CO': input_dict['CO']
         }
 
-        # Create a Pandas DataFrame (required by scikit-learn pipelines/models)
+        # Create a Pandas DataFrame
         input_df = pd.DataFrame([input_data_for_model], 
                                 columns=['PM2.5', 'PM10', 'SO2', 'O3', 'NO2', 'CO'])
 
         # Make prediction
         prediction = model.predict(input_df)
 
-        # Return the prediction (convert numpy float to standard Python float)
         return {
             "predicted_aqi": float(prediction[0]),
             "input_data": input_data_for_model
         }
 
     except Exception as e:
-        # Handle errors during prediction
         raise HTTPException(status_code=500, detail=f"Prediction failed due to an internal error: {e}")
-
-# If you want to test locally, you can uncomment this:
-# if __name__ == "__main__":
-#     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
